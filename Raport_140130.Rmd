@@ -1,0 +1,403 @@
+---
+title: "Raport z analizy karłowacenia śledzi"
+author: "Michał Leńczyk"
+date: "`r Sys.Date()`"
+output: 
+  
+  html_document: 
+    toc: yes
+    toc_float: yes
+    highlight: kate
+    theme: cerulean
+---
+
+```{r setup, echo=FALSE, results='hide', message=FALSE, warning=FALSE, error=FALSE, cache=TRUE}
+install.packages("dplyr", repos = "https://cran.mi2.ai/") #Comment if already installed
+install.packages("ggplot2", repos = "https://cran.mi2.ai/") #Comment if already installed
+install.packages("tidyr", repos = "https://cran.mi2.ai/") #Comment if already installed
+install.packages("naniar", repos = "https://cran.mi2.ai/") #Comment if already installed
+install.packages("plotly", repos = "https://cran.mi2.ai/") #Comment if already installed
+install.packages("zoo", repos = "https://cran.mi2.ai/") #Comment if already installed
+install.packages("caret", repos = "https://cran.mi2.ai/") #Comment if already installed
+install.packages("randomForest", repos = "https://cran.mi2.ai/") #Comment if already installed
+install.packages("corrgram", repos = "https://cran.mi2.ai/") #Comment if already installed
+install.packages("gganimate", repos = "https://cran.mi2.ai/") #Comment if already installed
+
+```
+
+```{r libraries, echo=FALSE, results='hide', message=FALSE, warning=FALSE, error=FALSE}
+library(knitr)
+library(dplyr)
+library(ggplot2)#charts
+library(tidyr)#cleaning
+library(naniar)#na handling
+library(plotly)#charts
+library(zoo)#na handling
+library(randomForest)#machine learning
+library(caret)#machine learning & regression
+library(corrgram)# correlation diagram
+#library(gganimate)# animations
+```
+
+```{r global_settings, include=FALSE}
+rm(list = ls()) #Upewniamy się że mamy czyste środowisko do pracy
+knitr::opts_chunk$set(echo = FALSE, results = 'show', message=FALSE, warning = FALSE, error=TRUE, fig.height = 8, fig.width = 10)
+set.seed(99)
+#options(scipen=10)#Precyzja, postać wykładnicza
+```
+
+```{r dataset_loading, cache=TRUE}
+ read.csv("data/sledzie.csv") -> raw_data
+```
+# 1. Wprowadzenie
+
+## 1.1 Opis danych wejściowych
+
+Nasz źródłowy dataset zawiera informacje na temat połowu śledzi w Europie, w ciągu ostatnich 60 lat. Zbiór danych zawiera informacje dotyczące długości złowionych śledzi, dostępności planktonu będącego jego pożywieniem oraz informacje na temat samych połowów i rzeczy takich jak temperatura przy powierzchni wody i jej poziom zasolenia w momencie połowu.
+
+Zbiór ten jest podstawą do analizy i określenia głównych przyczyn stopniowego karłowacenia (zmniejszania się długości) śledzi w Europie. Zbiór składa się z następujących atrybutów:
+
+- **X**: numer obserwacji/próbki
+- **length:** długość złowionego śledzia [cm]
+- **cfin1:** dostępność planktonu [zagęszczenie Calanus finmarchicus gat. 1]
+- **cfin2:** dostępność planktonu [zagęszczenie Calanus finmarchicus gat. 2]
+- **chel1:** dostępność planktonu [zagęszczenie Calanus helgolandicus gat. 1]
+- **chel2:** dostępność planktonu [zagęszczenie Calanus helgolandicus gat. 2]
+- **lcop1:** dostępność planktonu [zagęszczenie widłonogów gat. 1]
+- **lcop2:** dostępność planktonu [zagęszczenie widłonogów gat. 2]
+- **fbar:** natężenie połowów w regionie [ułamek pozostawionego narybku]
+- **recr:** roczny narybek [liczba śledzi]
+- **cumf:** łączne roczne natężenie połowów w regionie [ułamek pozostawionego narybku]
+- **totaln:** łączna liczba ryb złowionych w ramach połowu [liczba śledzi]
+- **sst:** temperatura przy powierzchni wody [°C]
+- **sal:** poziom zasolenia wody [Knudsen ppt]
+- **xmonth:** miesiąc połowu [numer miesiąca]
+- **nao:** oscylacja północnoatlantycka [mb].
+
+## 1.2 Executive Summary
+
+Po analizie danych, na podstawie diagramu korelacji oraz utworzonego regresora, jednoznacznie stwierdzono, że największą przyczyną karłowacenia śledzi jest wzrost temperatury przy powierzchnii wody. Wpływ również miała oscylacja północno-atlantycka, jednak jest bardzo wysokie przypuszczenie że jest to spowodowane tym iż bezpośrednio wpływa ona na temperaturę przy powierzchnii wody.
+
+Nasze tezy znajdują potwierdzenie w wielu artykułach co sugeruje poprawność naszej analizy i modelu.
+
+1. https://www.sciencedirect.com/science/article/pii/S1574954120301047
+2. https://academic.oup.com/plankt/article/44/3/401/6562678
+3. https://www.scielo.cl/scielo.php?pid=S0718-560X2022000100031&script=sci_arttext
+
+# 2. Analiza danych źródłowych
+## 2.1 Podsumowanie wejściowego zbioru danych
+
+```{r raw_summary}
+summary(raw_data)
+str(raw_data)
+```
+
+**Komentarz:** Wstępne oględziny zbioru danych sugerują, że posiada on wartości puste oznaczone symbolem "?" mające symbolizować błąd/niedostępność/brak danych `(NA)`. Dodatkowo widać, że niektóre kolumny zawierające liczby są złego typu (character) i powinny zostać zrzutowane na prawidłowy typ numeryczny.
+
+## 2.2 Postprocessing danych źródłowych
+### 2.2.1 Rzutowanie na właściwe typy, uwzględnienie wartości pustych
+```{r tidying_1, cache=TRUE}
+raw_data -> tidy_data
+tidy_data <- na_if(tidy_data,"?")
+tidy_data <- tidy_data %>% 
+  mutate_at(c('cfin1','cfin2','chel1','chel2','lcop1','lcop2','sst'), as.numeric)
+  
+summary(tidy_data)
+```
+
+**Komentarz:** Powyższy fragment kodu zamienia znak "?" na `NA` oraz rzutuje na typ numeryczny wartości z kolumn, które posiadały błędny typ (character).
+Tak wstępnie wyczyszczone dane są następnie zapisywane jako nowy dataset o nazwie *tidy_dataset*. 
+
+Rozkład wartości pustych `(NA)` w naszym zbiorze prezentuje się następująco:
+
+```{r na_calc}
+na_count <- sapply(tidy_data, function(y) sum(length(which(is.na(y)))))
+na_count <- as.data.frame(na_count)
+na_count <- setNames(na_count,c("Liczba NA dla danego atrybutu"))
+na_count
+
+```
+
+**Komentarz:** Widać że kolumny zawierające informacje o dostępności danego planktonu (cfin1,cfin2,chel1,chel2,lcop2,lcop3) oraz temperatury przy powierzchni wody (sst) zawierają puste wartości. Każdy atrybut posiadający wartości puste musi zostać przeanalizowany względem całokształtu zestawu danych by móc określić jakie działanie będzie najlepsze pod względem statystycznym. Musimy podjąć decyzję czy wartość `NA` zostanie np. zastąpiona średnią, ostatnią znaną próbką, wyzerowana, czy może najlepszym rozwiązaniem będzie usunięcie próbki tj. powiązanego z nią rekordu.
+
+I tak kolejno dla atrybutów posiadających `NA` postanowione zostało:
+
+**cfin1,cfin2,chel1,chel2,lcop2,lcop3**: oznacza dostępność planktonu określonego gatunku w momencie połowu. Wartość pusta nie może zostać domyślnie zastąpiona zerem ponieważ powstanie sytuacja typu *"w jeden dzień zniknął cały plankton, by następnego znowu się pojawić"*. Wartość średnia całej kolumny również jest złym pomysłem ponieważ może zawyżyć/obniżyć wartości zebrane w danym oknie czasowym np. wartość średnia atrybutu wyniosła 5, ale w danym oknie czasowym wartość planktonu utrzymywała się między 3 a 4, dlatego wybranie średniej może dać nam mocno przekłamane wyniki. 
+
+Najlepszym rozwiązaniem będzie zastąpienie wartości `NA` ostatnią wartością niepustą ale **z uporządkowanego ciągu** tych wartości, dla **każdego atrybutu z osobna**. W tym przypadku uzyskamy sytuację w której najgorszym możliwym przypadkiem granicznym będzie ostatnia wartość niepusta z poprzedniego analizowanego połowu z maksymalnym błędem w postaci różnicy dostępności planktonu między dwoma połowami.
+
+Na przykład dla `cfin1 = {15,NA,10}`, przy założeniu że dostępność planktonu liniowo malała, wartość średnia `(12.5)` byłaby dobrym rozwiązaniem, natomiast przy takich samych założeniach dla przypadku: `cfin1 = {15,15,15,15,NA,...,14,14,...,13,...,NA,...,12,...,11,...,NA,...,10}`, wybranie wartości średniej dla tego okna czasowego i zestawu próbek byłoby złym pomysłem ponieważ pierwsze `NA` powinno mieć wartość z przedziału `<15,14>`, a trzecie z przedziału `<11,10>`, jedynie dla drugiego `NA`, które znajduje się mniej więcej po środku zbioru, wartość średnia (12.5) spełnia założenie że drugie `NA` powinno być z przedziału `<13,12>`.
+
+**sst**: oznacza temperaturę przy powierzchnii wody. Ze względu na mały rozkład wartości `<12.77,14.73>` wybranie wartości średniej wydaje się być dobrym pomysłem. Jednakże dla tego atrybutu zdecydowanie należy wziąć pod uwagę precyzję i czułość. Zmiana wartości temperatury nawet o 1.0, która mierzona była z dużą dokładnością może mieć znaczący wpływ na naszą analizę. 
+
+Bezpieczniej i lepiej z statystycznego punktu widzenia będzie zastosowanie tego samego podejścia co dla kolumn zawierających informacje o dostępności planktonu. Tutaj w najgorszym możliwym przypadku uzyskamy błąd w postaci różnicy temperatur między dwoma połowami, który powinien być zasadniczo mały jeśli przyjmiemy założenie, że jeśli jeden pomiar był wykonany zimą, to kolejny **nie** był wykonany dopiero podczas gorącego lata, co w przypadku naszego **uporządkowanego** zbioru danych jest definitywnie spełnione. 
+
+### 2.2.2 Podsumowanie zbioru po operacji czyszczenia danych
+
+```{r tidying_2}
+tidy_data <- arrange(tidy_data,tidy_data$cfin1)
+tidy_data$cfin1 <- na.locf(tidy_data$cfin1, na.rm = FALSE)
+
+tidy_data <- arrange(tidy_data,tidy_data$cfin2)
+tidy_data$cfin2 <- na.locf(tidy_data$cfin2, na.rm = FALSE)
+
+tidy_data <- arrange(tidy_data,tidy_data$chel1)
+tidy_data$chel1 <- na.locf(tidy_data$chel1, na.rm = FALSE)
+
+tidy_data <- arrange(tidy_data,tidy_data$chel2)
+tidy_data$chel2 <- na.locf(tidy_data$chel2, na.rm = FALSE)
+
+tidy_data <- arrange(tidy_data,tidy_data$lcop1)
+tidy_data$lcop1 <- na.locf(tidy_data$lcop1, na.rm = FALSE)
+
+tidy_data <- arrange(tidy_data,tidy_data$lcop2)
+tidy_data$lcop2 <- na.locf(tidy_data$lcop2, na.rm = FALSE)
+
+tidy_data <- arrange(tidy_data,tidy_data$sst)
+tidy_data$sst <- na.locf(tidy_data$sst, na.rm = FALSE)
+
+#Wracamy do porzadku domyslnego
+tidy_data <- arrange(tidy_data,tidy_data$X)
+
+summary(tidy_data)
+str(tidy_data)
+```
+**Komentarz:** Po pełnym czyszczeniu i uporządkowaniu danych możemy m.in wyczytać że badany zbiór ma **52582** próbek. Poniżej prezentowane są rozkłady wartości poszczególnych atrybutów z pominięciem `X` który jest numerem danej próbki/połowu.
+
+### 2.2.3 Rozkłady wartości poszczególnych atrybutów
+
+```{r attribute_dist}
+
+tidy_data %>%
+  ggplot(aes(x=length)) + 
+  geom_histogram(binwidth=0.25, fill="steelblue",color="black", alpha=.7) +
+  theme_bw() + scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) + xlab("Długość śledzia (length)")
+
+tidy_data[,3:8] %>% gather() %>%
+  ggplot(aes(x=value)) + 
+  geom_histogram(fill="steelblue", color="black", alpha=.7) +
+  theme_bw() +
+  facet_wrap(~key, scales="free_x") + xlab("Ilość, dostępność planktonu danego gatunku\n\n\n")
+
+tidy_data %>%
+  ggplot(aes(x=fbar)) + 
+  geom_histogram(fill="steelblue", color="black", alpha=.7) +
+  theme_bw()  + xlab("Natężenie połowów w regionie - ułamek pozostawionego narybku (fbar)\n\n\n")
+
+tidy_data %>%
+  ggplot(aes(x=recr)) + 
+  geom_histogram(fill="steelblue", color="black", alpha=.7) +
+  theme_bw()  + xlab("Roczny narybek (recr)\n\n\n")
+
+tidy_data %>%
+  ggplot(aes(x=cumf)) + 
+  geom_histogram(fill="steelblue", color="black", alpha=.7) +
+  theme_bw()  + xlab("Roczne natężenie połowów w regionie - ułamek pozostawionego narybku (cumf)\n\n\n")
+
+tidy_data %>%
+  ggplot(aes(x=totaln)) + 
+  geom_histogram(binwidth=10000, fill="steelblue", color="black", alpha=.7) +
+  theme_bw()  + xlab("Łączna liczba złowionych ryb podczas jednego połowu (totaln)\n\n\n")
+
+tidy_data %>%
+  ggplot(aes(x=sst)) + 
+  geom_histogram(binwidth=0.05, fill="steelblue", color="black", alpha=.7) +
+  theme_bw()  + xlab("Temperatura przy powierzchni wody podczas połowu (sst) [°C]\n\n\n")
+
+tidy_data %>%
+  ggplot(aes(x=sal)) + 
+  geom_histogram(fill="steelblue", color="black", alpha=.7) +
+  theme_bw()  + xlab("Poziom zasolenia wody podczas połowu (sal) [Knudsen ppt]\n\n\n")
+
+tidy_data %>%
+  ggplot(aes(x=xmonth)) + 
+  geom_bar(fill="steelblue", color="black", alpha=.7) +
+  theme_minimal() + scale_x_continuous(breaks = scales::pretty_breaks(n = 12)) + xlab("Miesiąc połowu (xmonth)")
+
+tidy_data %>%
+  ggplot(aes(x=nao)) + 
+  geom_histogram(fill="steelblue", color="black", alpha=.7) +
+  theme_bw()  + xlab("Oscylacja północno-atlantycka (nao) [mb]\n\n\n")
+```
+
+# 3. Analiza danych
+
+## 3.1 Korelacja atrybutów
+
+Poniżej zaprezentowano korelację poszczególnych atrybutów w postaci diagramu, z wyłączeniem atrybutu `X` w celu wstępnego określenia który atrybut **może ale nie musi** mieć największy wpływ na długość śledzia.
+
+```{r correlation_diagram}
+corrgram(select(tidy_data,-X), lower.panel=panel.shade, upper.panel=panel.cor)
+```
+**Komentarz:** Wstępne oględziny diagramu sugerują, że na interesujący nas atrybut `length` największy wpływ mają atrybuty `sst,nao,fbar` oraz `chel1`. Wartości ujemne oznaczają negatywną korelację względem danego atrybutu tj. jeśli dany atrybut rośnie to drugi maleje, w przypadku dodatniej/pozytywnej korelacji wzrost wartości jednego atrybutu powoduje również zwiększenie wartości drugiego atrybutu.
+
+Uwaga: tutaj warto zwrócić uwagę że natężenie połowów jest wyrażane w postaci ułamka pozostawionego narybku, czyli im silniejszy połów tym ten ułamek będzie mniejszy. Co może być mylące na diagramie.
+
+Analizując powyższy diagram możemy wysnuć następujące hipotezy, które później mogą zostać poddane weryfikacji:
+
+- Długość śledzia (length) zależy od temperatury (sst) przy powierzchni wody.
+
+*Może śledzie źle się czują w cieplejszej wodzie?*
+
+- Długość śledzia (length) zależy od oscylacji północnoatlantyckiej (nao).
+
+*Może śledzie mają gorsze warunki do życia podczas specyficznych wartości oscylacji północno-atlantyckiej?*
+
+- Długość śledzia (length) zależy od natężenia połowów w regionie (fbar).
+
+*Może śledzie nie dorastają do większych rozmiarów z powodu zbyt częstych połowów?*
+
+- Długość śledzia (length) zależy od dostępności planktonu *Calanus helgolandicus* gatunku pierwszego (chel1).
+
+*Może ten specyficzny gatunek planktonu zawiera więcej substancji odżywczych co pozytywnie wpływa na wzrost długości śledzi?*
+
+## 3.2 Wizualizacja danych, tez
+
+```{r data_showcase}
+tidy_data %>% 
+  ggplot(aes(x=X, y=length)) + 
+  geom_line() +
+  geom_smooth() +
+  theme_bw() +
+  xlab("Próbka (X)") +
+  ylab("Długość śledzia (length) [cm]\n\n\n") +
+  coord_cartesian(ylim = c(19, 33)) +
+  scale_y_continuous(n.breaks = 10) -> p0
+
+ggplotly(p0)
+
+tidy_data %>% 
+  ggplot(aes(x=sst, y=length)) + 
+  geom_smooth() +
+  theme_bw() +
+  xlab("Temperatura przy powierzchni wody (sst) [°C]") +
+  ylab("Długość śledzia (length) [cm]\n\n\n") +
+  coord_cartesian(ylim = c(19, 33)) +
+  scale_y_continuous(n.breaks = 10) -> p1
+
+tidy_data %>% 
+  ggplot(aes(x=nao, y=length)) + 
+  geom_smooth() +
+  theme_bw() +
+  xlab("Oscylacja północno-atlantycka (nao) [mb]") +
+  ylab("Długość śledzia (length) [cm]\n\n\n") +
+  coord_cartesian(ylim = c(19, 33)) +
+  scale_y_continuous(n.breaks = 10) -> p2
+
+tidy_data %>% 
+  ggplot(aes(x=fbar, y=length)) + 
+  geom_smooth() +
+  theme_bw() +
+  xlab("Natężenie połowów w regionie (fbar) \n[Ułamek pozostawionego narybku]") +
+  ylab("Długość śledzia (length) [cm]\n\n\n") +
+  coord_cartesian(ylim = c(19, 33)) +
+  scale_y_continuous(n.breaks = 10) -> p3
+
+tidy_data %>% 
+  ggplot(aes(x=chel1, y=length)) + 
+  geom_smooth() +
+  theme_bw() +
+  xlab("Dostępność planktonu \n Calanus helgolandicus gatunku pierwszego (chel1)") +
+  ylab("Długość śledzia (length) [cm]\n\n\n") +
+  coord_cartesian(ylim = c(19, 33)) +
+  scale_y_continuous(n.breaks = 10) -> p4
+  
+subplot(p1,p2,p3,p4, nrows = 2, titleX = TRUE, titleY = TRUE, margin=c(0.03,0.05,0.05,0.05), heights=c(0.5,0.5), widths=c(0.5,0.5))
+```
+
+## 3.3 Regresja
+
+### 3.3.1 Tworzenie modelu regresora
+
+Tworzony regresor mający za zadanie przewidzieć długość śledzi, nie powinien brać pod uwagę atrybutów które nie mają praktycznie żadnego wpływu (są bardzo bliskie wartości 0.0) na długość śledzi. 
+
+W celu "wycięcia" tych atrybutów należy wpierw ustalić tzw. parametr odcięcia, który będzie określał kiedy dany atrybut będzie wycięty tj. jego korelacja bezwzględna będzie mniejsza niż nasz zadany parametr odcięcia. Parametr ten powinien być odpowiednio wysoki byśmy mogli wyciąć najmniej skorelowane zmienne, ale tak byśmy nie wycięli zbyt dużo atrybutów z naszego zbioru, ponieważ będzie mogło to się wiązać z przekłamanymi wynikami. 
+Zdecydowano się na parametr odcięcia wielkości: `0.8`.
+
+Do obliczania współczynnika korelacji wybrano metodę Pearsona. 
+
+Do utworzenia wiarygodnego modelu, zostały utworzone odpowiednio zbiór uczący `train_data` oraz zbiór testowy `test_data`, oba na podstawie źródłowego zbioru danych po operacji czyszczenia o nazwie `tidy_data`. Na zbiór treningowy przeznaczone zostało 75% zbioru danych. Pozostałe 25% zostało przeznaczone na zbiór testowy. 
+
+Zbiór walidacyjny został natomiast utworzony za pomocą *repeated cross-validation* o pięciokrotnej liczbie powtórzeń i dwóch podziałach.
+
+
+Do samego sprawdzenia poprawności modelu wykorzystany został algorytm *Random Forest* z miarami predykcji w postaci współczynnika determinacji (R^2^), pierwiastka z błędu średniokwadratowego (RMSE) oraz średniego błędu bezwzględnego (MAE).
+
+Ostatecznie parametry do tworzenia modelu prezentują się następująco:
+
+- **CutOff parameter:** `0.66` - parametr odcięcia
+- **Correlation coefficient evaluation method:** `Pearson` - metoda ewaluacji dla korelacji atrybutów
+
+- **Partition split:** `0.75` - podział zbioru na treningowy/testowy
+- **Validation method:** `RepeatedCrossValidation(repeats=4,number=2)`
+- **Prediction method:**`Random Forest`
+- **Prediction and accuracy methods:** R^2^, RMSE, MAE.
+
+### 3.3.2 Ocena jakości
+
+Atrybuty uznane za zbyt słabo skorelowane wzlędem naszego `cutOffParameter` to:
+
+```{r regression_settings}
+cutOffParameter = 0.66
+
+prediction_dataset <- tidy_data %>% 
+  select(-X) %>% 
+    cor(use = "all.obs", method="pearson")
+
+prediction_dataset %>% findCorrelation(cutoff = cutOffParameter, names = TRUE) -> lowCorrelatedAttributes
+
+lowCorrelatedAttributes
+```
+
+```{r regression_setup}
+
+input_data <- createDataPartition(y = tidy_data$length, p = 0.75, list=FALSE)
+
+train_data <- tidy_data[input_data, ] %>% select(-c(X, lowCorrelatedAttributes))
+
+test_data <- tidy_data[-input_data, ] %>% select(-c(X, lowCorrelatedAttributes))
+
+ctrl <- trainControl(method="repeatedcv", number = 2, repeats = 4)
+
+ggplot() + geom_density(aes(length, fill = "train_data"), train_data, alpha = 0.6) +
+  geom_density(aes(length, fill = "test_data"), test_data, alpha = 0.8) +
+  labs(x = "Długość śledzia (length)", y = "Density", fill = "Dataset:") + 
+  theme_bw() + 
+  scale_fill_brewer(palette="YlGnBu") +
+  ggtitle("Rozkład zbiorów wejściowych z podziałem na testowy i treningowy")
+```
+**Komentarz: ** Widać że rozkłady obu zbiorów są do siebie wystarczająco zbliżone/różne, dla naszego podziału. Nie mamy mocnego odchylenia ani wartości odstających.
+
+```{r regression_train}
+
+fit <- train(length ~ . , data = train_data, method = "rf", trControl = ctrl, ntree=10)
+
+fit
+```
+Ostatecznie, średnia z miar prezentuje się następująco: 
+```{r regression_results}
+eval <- predict(fit, test_data)
+results <- postResample(pred = eval, obs = test_data$length)
+
+knitr::kable(results)
+```
+**Komenatrz: ** Widać że wartość RMSE wynosi około 1, co oznacza że średnio nasz model regresora myli się co do rzeczywistych wartości śledzia o 1 jednostkę atrybutu, co w naszym przypadku jest pojedynczym centrymentrem. Jeśli spójrzymy znowu na rozkład wartości długości śledzi, to możemy dojść do stwierdzenia, że błąd wielkości około 1 centymetra jest akceptowalny.
+
+Z drugiej strony miara R^2^ wynosi około 0.5 co nie jest raczej słabym wynikiem, ale leżącym w granicach normy. Wartość rzędu 0.7-0.8 byłaby tutaj o wiele bardziej satysfakcjonująca.
+
+### 3.3.3 Konkluzja
+
+```{r hypothesis_confirm}
+varImp(fit) -> importance
+ggplot(importance) + theme_bw()
+```
+**Komentarz: ** W celu określenia ważności atrybutów użyliśmy funkcji `varImp()`. Na jej podstawie jednoznacznie możemy stwierdzić, że najważniejszym atrybutem mającym wpływ na długość śledzi jest temperatura przy powierzchni wody (sst). 
+
+Nasze przewidywania na podstawie samego diagramu korelacji atrybutów, znajdują potwierdzenie u naszego modelu. Również natężenie połowów ma w miarę duży wpływ, tak jak przewidzieliśmy. Należy jednak wyraźnie zaznaczyć, że reszta atrybutów ma niższe wartości i istnieje wysoka szansa na zmianę kolejności ich ważności przy ponownym uruchomieniu modelu treningowego. 
+
+
+
+
+
+
+

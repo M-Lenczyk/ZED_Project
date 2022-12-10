@@ -1,0 +1,11 @@
+knitr
+dplyr
+ggplot2
+tidyr
+naniar
+plotly
+zoo
+randomForest
+lattice
+caret
+corrgram
